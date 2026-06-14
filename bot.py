@@ -582,5 +582,5 @@ async def bot_info(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=SelectorIdioma())
 
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("TOKEN")
 client.run(TOKEN)
