@@ -178,6 +178,27 @@ def t(guild_id, clave, **kwargs):
     return texto.format(**kwargs) if kwargs else texto
 
 
+# ── Configuración IDs del servidor ────────────────────────
+GUILD_ID = 1515896622587052122
+ROL_CC_ID = 1515899229388673144
+CANAL_POSTULACIONES_ID = 1515899874137215046
+
+# ── Estado de postulaciones activas por DM ────────────────
+# Guarda el estado de cada usuario que está en proceso de postulación
+# formato: { user_id: { "paso": 1, "respuestas": {} } }
+postulaciones_activas = {}
+
+# ── Requisitos CC ─────────────────────────────────────────
+REQUISITOS = {
+    "min_seguidores": 1000,   # Mínimo 1k seguidores
+    "videos_semana": 3,       # 3 videos por semana
+    "min_views": 1000,        # 1k+ average views
+    "seguir_tiktok": True,    # Debe seguir el TikTok oficial
+}
+
+TIKTOK_OFICIAL = "@starhurbanstudio"  # TikTok que deben seguir
+
+
 @client.event
 async def on_ready():
     await tree.sync()
@@ -253,31 +274,228 @@ async def antilink(interaction: discord.Interaction, canal: discord.TextChannel,
 MALAS_PALABRAS = ["mierda", "puta", "idiota", "imbecil", "pendejo", "cabron", "puto"]
 DURACION_AISLAMIENTO = 8
 
+
+# ── Lógica de postulación CC paso a paso ──────────────────
+async def iniciar_postulacion(message):
+    """Inicia el proceso de postulación pregunta por pregunta."""
+    user_id = message.author.id
+    postulaciones_activas[user_id] = {"paso": 1, "respuestas": {}}
+
+    embed = discord.Embed(
+        title="🎬 Programa de Creadores de Contenido — Street Bronx",
+        description=(
+            "¡Gracias por tu interés! Vamos a revisar si cumples los requisitos.\n\n"
+            "**📋 REQ CC — Requisitos:**\n"
+            "✅ Seguir **@starhurbanstudio** en TikTok\n"
+            "✅ Mínimo **3 videos por semana**\n"
+            "✅ Mínimo **1,000 seguidores** (o 5,000)\n"
+            "✅ Mínimo **1,000 views promedio**\n\n"
+            "Responde las siguientes preguntas una por una. ¡Empecemos!"
+        ),
+        color=discord.Color.from_rgb(255, 50, 50)
+    )
+    embed.set_footer(text="Street Bronx — Content Creator Program")
+    await message.channel.send(embed=embed)
+    await asyncio.sleep(1)
+    await message.channel.send("**1️⃣ ¿Cuál es tu nombre de usuario de Roblox?**")
+
+
+async def procesar_respuesta_cc(message):
+    """Procesa cada respuesta del formulario paso a paso."""
+    user_id = message.author.id
+    estado = postulaciones_activas[user_id]
+    paso = estado["paso"]
+    respuestas = estado["respuestas"]
+
+    if paso == 1:
+        respuestas["roblox"] = message.content
+        estado["paso"] = 2
+        await message.channel.send("**2️⃣ ¿En qué plataforma creas contenido?** (YouTube, TikTok, Twitch, etc.)")
+
+    elif paso == 2:
+        respuestas["plataforma"] = message.content
+        estado["paso"] = 3
+        await message.channel.send("**3️⃣ ¿Cuántos seguidores o suscriptores tienes actualmente?** (escribe solo el número)")
+
+    elif paso == 3:
+        # Intentar extraer número de seguidores
+        num_str = message.content.replace(",", "").replace(".", "").strip()
+        try:
+            seguidores = int("".join(filter(str.isdigit, num_str)))
+        except:
+            seguidores = 0
+        respuestas["seguidores"] = seguidores
+        respuestas["seguidores_raw"] = message.content
+        estado["paso"] = 4
+        await message.channel.send("**4️⃣ ¿Cuántos views promedio tienen tus videos/streams?** (escribe solo el número)")
+
+    elif paso == 4:
+        num_str = message.content.replace(",", "").replace(".", "").strip()
+        try:
+            views = int("".join(filter(str.isdigit, num_str)))
+        except:
+            views = 0
+        respuestas["views"] = views
+        respuestas["views_raw"] = message.content
+        estado["paso"] = 5
+        await message.channel.send("**5️⃣ ¿Cuántos videos subes por semana aproximadamente?** (escribe solo el número)")
+
+    elif paso == 5:
+        num_str = message.content.strip()
+        try:
+            videos = int("".join(filter(str.isdigit, num_str)))
+        except:
+            videos = 0
+        respuestas["videos_semana"] = videos
+        estado["paso"] = 6
+        await message.channel.send("**6️⃣ ¿Sigues a " + TIKTOK_OFICIAL + " en TikTok?** (responde: sí / no)")
+
+    elif paso == 6:
+        sigue = message.content.lower().strip()
+        respuestas["sigue_tiktok"] = "si" in sigue or "sí" in sigue or "yes" in sigue
+        estado["paso"] = 7
+        await message.channel.send("**7️⃣ Comparte el enlace a tu canal o perfil principal.**")
+
+    elif paso == 7:
+        respuestas["link"] = message.content
+        estado["paso"] = 8
+        await message.channel.send("**8️⃣ ¿Por qué te gustaría representar a Street Bronx?**")
+
+    elif paso == 8:
+        respuestas["motivacion"] = message.content
+        # Postulación completa — evaluar requisitos
+        del postulaciones_activas[user_id]
+        await evaluar_postulacion(message, respuestas)
+
+
+async def evaluar_postulacion(message, respuestas):
+    """Evalúa si el usuario cumple los requisitos y actúa en consecuencia."""
+    seguidores = respuestas.get("seguidores", 0)
+    views = respuestas.get("views", 0)
+    videos = respuestas.get("videos_semana", 0)
+    sigue_tiktok = respuestas.get("sigue_tiktok", False)
+
+    cumple_seguidores = seguidores >= REQUISITOS["min_seguidores"]
+    cumple_views = views >= REQUISITOS["min_views"]
+    cumple_videos = videos >= REQUISITOS["videos_semana"]
+    cumple_tiktok = sigue_tiktok
+
+    aprobado = cumple_seguidores and cumple_views and cumple_videos and cumple_tiktok
+
+    # Embed resumen de postulación para el canal de staff
+    guild = discord.utils.get(client.guilds, id=GUILD_ID)
+    canal_staff = client.get_channel(CANAL_POSTULACIONES_ID) if CANAL_POSTULACIONES_ID else None
+
+    if canal_staff and guild:
+        embed_staff = discord.Embed(
+            title="📥 Nueva Postulación CC — " + message.author.name,
+            color=discord.Color.green() if aprobado else discord.Color.orange(),
+        )
+        embed_staff.add_field(name="👤 Usuario Discord", value=message.author.mention + " (" + message.author.name + ")", inline=False)
+        embed_staff.add_field(name="🎮 Roblox", value=respuestas.get("roblox", "N/A"), inline=True)
+        embed_staff.add_field(name="📱 Plataforma", value=respuestas.get("plataforma", "N/A"), inline=True)
+        embed_staff.add_field(name="👥 Seguidores", value=respuestas.get("seguidores_raw", "N/A") + (" ✅" if cumple_seguidores else " ❌"), inline=True)
+        embed_staff.add_field(name="👁️ Views Promedio", value=respuestas.get("views_raw", "N/A") + (" ✅" if cumple_views else " ❌"), inline=True)
+        embed_staff.add_field(name="🎬 Videos/Semana", value=str(respuestas.get("videos_semana", "N/A")) + (" ✅" if cumple_videos else " ❌"), inline=True)
+        embed_staff.add_field(name="📲 Sigue TikTok Oficial", value=("Sí ✅" if cumple_tiktok else "No ❌"), inline=True)
+        embed_staff.add_field(name="🔗 Link", value=respuestas.get("link", "N/A"), inline=False)
+        embed_staff.add_field(name="💬 Motivación", value=respuestas.get("motivacion", "N/A"), inline=False)
+        embed_staff.add_field(name="📊 Resultado", value="✅ **APROBADO AUTOMÁTICAMENTE**" if aprobado else "⏳ **PENDIENTE — Revisión manual**", inline=False)
+        embed_staff.set_thumbnail(url=message.author.display_avatar.url)
+        await canal_staff.send(embed=embed_staff)
+
+    if aprobado:
+        # Dar rol automáticamente
+        member = guild.get_member(message.author.id) if guild else None
+        rol_cc = guild.get_role(ROL_CC_ID) if guild else None
+
+        if member and rol_cc:
+            await member.add_roles(rol_cc)
+
+            # Cambiar nickname agregando [CC]
+            try:
+                nuevo_nick = "[✅] " + (member.nick or member.name) + " [CC]"
+                await member.edit(nick=nuevo_nick[:32])  # Discord límite 32 chars
+            except discord.Forbidden:
+                pass  # Sin permisos para cambiar nick
+
+        # Mensaje de aprobación al usuario por DM
+        embed_aprobado = discord.Embed(
+            title="🎉 ¡Felicitaciones! Eres parte del equipo de Creadores",
+            description=(
+                "¡Bienvenido/a a la comunidad de Creadores de Contenido de **Street Bronx**! 🎬\n\n"
+                "Se te ha asignado el rol **Content Creator** y tu identificador **[CC]**.\n\n"
+                "**🎬 BENEFICIOS PARA CREADORES DE CONTENIDO 🎬**\n\n"
+                "💰 **Pago por Colaboraciones**\n"
+                "Recibirás hasta **$5.000.000** dentro del juego todos los meses.\n\n"
+                "🎟️ **Acceso a Eventos Privados**\n"
+                "Participa en eventos exclusivos junto al Staff, invitados especiales y otros creadores.\n\n"
+                "⭐ **Rango Exclusivo de Creador**\n"
+                "Obtén un rango único que te destacará dentro del servidor y la comunidad.\n\n"
+                "🎁 **Recompensas Especiales**\n"
+                "Recibe vehículos exclusivos, objetos únicos y premios especiales para tus videos.\n\n"
+                "📢 **Promoción Oficial**\n"
+                "Tu contenido podrá ser compartido en <#1504542925097271316>.\n\n"
+                "¡Gracias por representar a Street Bronx! 🚀"
+            ),
+            color=discord.Color.gold()
+        )
+        embed_aprobado.set_footer(text="Street Bronx — Content Creator Program ✅")
+        await message.channel.send(embed=embed_aprobado)
+
+
+
+    else:
+        # No cumple requisitos — mensaje al usuario
+        faltantes = []
+        if not cumple_seguidores:
+            faltantes.append("• Mínimo **1,000 seguidores** (tienes: " + str(respuestas.get("seguidores", 0)) + ")")
+        if not cumple_views:
+            faltantes.append("• Mínimo **1,000 views promedio** (tienes: " + str(respuestas.get("views", 0)) + ")")
+        if not cumple_videos:
+            faltantes.append("• Mínimo **3 videos por semana** (tienes: " + str(respuestas.get("videos_semana", 0)) + ")")
+        if not cumple_tiktok:
+            faltantes.append("• Seguir **" + TIKTOK_OFICIAL + "** en TikTok")
+
+        embed_rechazado = discord.Embed(
+            title="⏳ Postulación en Revisión",
+            description=(
+                "Gracias por postularte a **Street Bronx Content Creator**.\n\n"
+                "Parece que aún no cumples todos los requisitos automáticos:\n\n" +
+                "\n".join(faltantes) +
+                "\n\n📨 Tu postulación ha sido enviada al **Staff** para revisión manual.\n"
+                "Te contactaremos pronto con una respuesta. ¡Sigue creando contenido! 💪"
+            ),
+            color=discord.Color.orange()
+        )
+        embed_rechazado.set_footer(text="Street Bronx — Content Creator Program")
+        await message.channel.send(embed=embed_rechazado)
+
+
 @client.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # ── Respuesta automática por DM para creadores de contenido ──
+    # ── DM: Sistema de postulación CC ─────────────────────
     if isinstance(message.channel, discord.DMChannel):
+        user_id = message.author.id
+
+        # Si el usuario ya está en proceso de postulación, procesar su respuesta
+        if user_id in postulaciones_activas:
+            await procesar_respuesta_cc(message)
+            return
+
+        # Si el mensaje contiene palabras clave, iniciar postulación
         contenido_dm = message.content.lower()
         if any(x in contenido_dm for x in [
             "creador", "creator", "contenido", "content creator",
-            "youtube", "tiktok", "streamer", "postulacion"
+            "youtube", "tiktok", "streamer", "postulacion", "postulación", "aplicar", "apply"
         ]):
-            await message.channel.send(
-                "🎬 **Programa de Creadores de Contenido - Street Bronx**\n\n"
-                "¡Gracias por tu interés en convertirte en creador de contenido!\n\n"
-                "Por favor responde las siguientes preguntas:\n\n"
-                "1️⃣ ¿Cuál es tu nombre de usuario de Roblox?\n"
-                "2️⃣ ¿En qué plataforma creas contenido? (YouTube, TikTok, Twitch, etc.)\n"
-                "3️⃣ ¿Cuántos seguidores o suscriptores tienes?\n"
-                "4️⃣ ¿Por qué te gustaría representar a Street Bronx?\n"
-                "5️⃣ Comparte el enlace a tu canal o perfil.\n\n"
-                "📨 Cuando respondas estas preguntas, el equipo revisará tu solicitud."
-            )
+            await iniciar_postulacion(message)
         return
 
+    # ── Mensajes en servidor ───────────────────────────────
     gid = message.guild.id if message.guild else None
 
     if message.channel.id in canales_antilink:
